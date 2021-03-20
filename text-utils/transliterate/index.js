@@ -14,11 +14,10 @@ switch(lang) {
     break;
   case 'ja':
   case 'ko':
+  case 'ar':
     module.exports = require('./numbers');
     break;
-  case 'zh':
-    module.exports = require('./zh');
-    break;
   default:
-    throw new Error("No transliteration module for language " + lang);
+    module.exports = require('./limax');
+    break;
 }

@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * Loads info from external sources for
  * sandbox: links
@@ -86,6 +84,16 @@ module.exports = async function (tokens, options) {
   async function blocktag_source(token) {
 
     if (!token.blockTagAttrs.src) return;
+
+    if (token.blockTagAttrs.src === true) {
+      throw new SrcError('No value for attribute src (there should be no space in src=value)');
+    }
+
+    /*
+    if (!token.blockTagAttrs.src.replace) { // findme: fixme: strange token for ar
+      console.error("ODD", token);
+    }
+    */
 
     let sourcePath = srcUnderRoot(
       options.publicRoot,

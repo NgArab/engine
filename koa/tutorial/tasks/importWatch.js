@@ -4,7 +4,7 @@ let TutorialViewStorage = require('../models/tutorialViewStorage');
 let FiguresImporter = require('../lib/figuresImporter');
 let fs = require('fs');
 let path = require('path');
-let livereload = require('gulp-livereload');
+let livereloadServer = require('engine/livereloadServer')
 let log = require('engine/log')();
 let chokidar = require('chokidar');
 let os = require('os');
@@ -18,7 +18,8 @@ module.exports = async function() {
   await TutorialViewStorage.instance().loadFromCache();
 
   let importer = new TutorialImporter({
-    root: config.tutorialRoot
+    root: config.tutorialRoot,
+    parserDryRunEnabled: false
   });
 
   tree.clear();
@@ -37,8 +38,6 @@ module.exports = async function() {
 
   watchFigures();
 
-  livereload.listen();
-
   await new Promise(resolve => {});
 
 };
@@ -49,9 +48,10 @@ function watchTutorial() {
 
   let importer = new TutorialImporter({
     root:     config.tutorialRoot,
+    parserDryRunEnabled: false,
     onchange: function(path) {
       log.info("livereload.change", path);
-      livereload.changed(path);
+      livereloadServer.queueFlush(path);
     }
   });
 
@@ -74,7 +74,7 @@ function watchTutorial() {
   tutorialWatcher.on('addDir', onTutorialModify.bind(null, true));
 
   function onTutorialModify(isDir, filePath) {
-    if (~filePath.indexOf('___jb_')) return; // ignore JetBrains Webstorm tmp files
+    if (filePath.includes('___jb_')) return; // ignore JetBrains Webstorm tmp files
 
     log.debug("ImportWatch Modify " + filePath);
 

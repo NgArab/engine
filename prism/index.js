@@ -6,6 +6,7 @@ require('./core');
 
 let CodeBox = require('./codeBox');
 let CodeTabsBox = require('./codeTabsBox');
+let proxyConsoleLog = require('./proxyConsoleLog');
 
 function initCodeBoxes(container) {
   // highlight inline
@@ -15,14 +16,12 @@ function initCodeBoxes(container) {
     new CodeBox(elem);
     elem.setAttribute('data-prism-highlighted', '1');
   }
-
 }
 
 
 function initCodeTabsBox(container) {
 
   let elems = container.querySelectorAll('div.code-tabs:not([data-prism-highlighted])');
-
 
   for (let elem of elems) {
     new CodeTabsBox(elem);
@@ -31,7 +30,6 @@ function initCodeTabsBox(container) {
 
 }
 
-
 exports.init = function () {
   document.removeEventListener('DOMContentLoaded', Prism.highlightAll);
 
@@ -39,7 +37,9 @@ exports.init = function () {
     highlight(document);
   });
 
+  proxyConsoleLog();
 };
+
 
 function highlight(elem) {
   initCodeBoxes(elem);

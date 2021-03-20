@@ -2,6 +2,13 @@ let resizeOnload = require('client/head/resizeOnload');
 let isScrolledIntoView = require('client/isScrolledIntoView');
 let makeLineNumbers = require('./makeLineNumbers');
 let makeHighlight = require('./makeHighlight');
+const { highlight } = require('prismjs');
+const config = require('config');
+let consoleFormat = require('engine/console/consoleFormat');
+const t = require('engine/i18n/t');
+
+const LANG = require('config').lang;
+t.i18n.add('prism', require('./locales/' + LANG + '.yml'));
 
 function CodeBox(elem) {
 
@@ -10,6 +17,10 @@ function CodeBox(elem) {
 
   let code = codeElem.textContent;
 
+  let outputBox;
+
+  elem.codeBox = this;
+  
   let runCode = code;
   if (elem.hasAttribute('data-async')) {
     runCode = `(async () => {\n${code}\n})()`;
@@ -25,19 +36,27 @@ function CodeBox(elem) {
   }
   */
 
-  preElem.insertAdjacentHTML("beforeEnd", lineNumbersWrapper);
+  preElem.insertAdjacentHTML("afterBegin", lineNumbersWrapper);
 
-  let masks = makeHighlight(JSON.parse(elem.getAttribute('data-highlight')));
-  preElem.insertAdjacentHTML("afterBegin", masks);
+  let ranges = JSON.parse(elem.getAttribute('data-highlight'));
+  if (ranges) {
+    emphasize(codeElem, ranges);
+  }
+
+  // preElem.insertAdjacentHTML("afterBegin", masks);
 
   let isJS = preElem.classList.contains('language-javascript');
   let isHTML = preElem.classList.contains('language-markup');
   let isTrusted = +elem.getAttribute('data-trusted');
   let isNoStrict = +elem.getAttribute('data-no-strict');
 
-  if (!isNoStrict && isJS) {
-    runCode="'use strict';\n\n" + runCode;
-  }
+  let useStrict = (!isNoStrict && isJS) ? `"use strict";` : '';
+  
+  // globalEval evaluates asynchronously, so we must inject codeBox id into the code
+  // then in console.log we use it to show the message under the current box
+  let codeBoxId = `globalThis.__codeBoxId = "${elem.id}";`;
+
+  runCode=`${useStrict}${codeBoxId}\n\n${runCode}`;
 
   let jsFrame;
   let globalFrame;
@@ -81,8 +100,76 @@ function CodeBox(elem) {
       alert("Sorry, your browser is too old");
       return;
     }
-    win.postMessage(runCode, 'https://lookatcode.com/showjs');
+    win.postMessage(runCode, config.lookatCodeUrlBase + '/showjs');
   }
+
+  
+  function emphasize(codeElem, ranges) {
+    let codeHtml = codeElem.innerHTML;
+    let split = codeHtml.split(/\n/);
+    
+    for(let range of ranges) {
+      if (range.end !== undefined) {
+        // block emphasize
+        split[range.start] = '<em class="block-highlight">' + split[range.start];
+        split[range.end] += '</em>';
+      } else {
+        let line = split[range.start];
+        let cols = range.cols;
+        let inTag = false;
+        let charCounter = -1;
+        let resultLine = '';
+        /*
+        if (cols.find(c => c.start == 0)) {
+          resultLine += '<em class="inline-highlight">';
+        }
+        */
+        // line = line.replace(/<.*?>/g, '<s>');
+        //line = `alert('Start of try runs');  // (1) &lt;---`;
+
+        for(let i = 0; i < line.length ; i++) {
+          if (line[i] == '<') inTag = true;
+          
+          if (inTag) {
+            resultLine += line[i];
+          } else {
+            charCounter++;
+
+            if (cols.find(c => c.start == charCounter)) {
+              resultLine += '<em class="inline-highlight">';
+            }
+
+            resultLine += line[i];
+
+            if (line[i] == '&') { // entities, such as &lt; are counted as single char in range.cols
+              let entities = ['lt;', 'gt;', 'amp;', 'quot;'];
+              for(let entity of entities) {
+                if (line.slice(i + 1, i + 1 + entity.length) == entity) {
+                  i += entity.length;
+                  resultLine += entity;
+                }
+              }
+            }
+
+            if (cols.find(c => c.end == charCounter + 1)) {
+              resultLine += '</em>';
+            }
+          }
+          
+          if (line[i] == '>') inTag = false;
+        }
+        /*
+        if (cols.find(c => c.end == charCounter + 1)) {
+          resultLine += '</em>';
+        }*/
+        
+        split[range.start] = resultLine;
+      }
+
+    }
+    codeElem.innerHTML = split.join('\n');
+  }
+
 
   function runHTML() {
 
@@ -104,7 +191,7 @@ function CodeBox(elem) {
       htmlResult.className = "code-result code-example__result";
 
       frame = document.createElement('iframe');
-      frame.name = 'frame-' + Math.random();
+      frame.name = elem.id; // for console.log
       frame.className = 'code-result__iframe';
 
       if (elem.getAttribute('data-demo-height') === "0") {
@@ -117,9 +204,25 @@ function CodeBox(elem) {
       htmlResult.appendChild(frame);
 
       elem.appendChild(htmlResult);
+
     } else {
       frame = htmlResult.querySelector('iframe');
     }
+
+    if (isTrusted && !frame.hasCustomConsoleLog) {
+      // iframe may have been generated above OR already put in HTML by autorun
+      frame.hasCustomConsoleLog = true;
+      let consoleLogNative = frame.contentWindow.console.log.bind(frame.contentWindow.console);
+  
+      // bind console.log to the current elem.id
+      frame.contentWindow.console.log = function(...args) {
+        consoleLogNative(...args);
+      
+        let formattedArgs = consoleFormat(args);
+        window.postMessage({type: 'console-log', log: formattedArgs, codeBoxId: elem.id}, '*');
+      };
+    }      
+
 
     if (isTrusted) {
       let doc = frame.contentDocument || frame.contentWindow.document;
@@ -144,12 +247,18 @@ function CodeBox(elem) {
       form.style.display = 'none';
       form.method = 'POST';
       form.enctype = "multipart/form-data";
-      form.action = "https://lookatcode.com/showhtml";
+      form.action = config.lookatCodeUrlBase + "/showhtml";
       form.target = frame.name;
 
       let textarea = document.createElement('textarea');
       textarea.name = 'code';
-      textarea.value = normalizeHtml(code);
+
+      let normalizedCode = normalizeHtml(code);
+      if (normalizedCode.includes('console.log')) {
+        // insert after <head> or <body>, to ensure that console.log is replaced immediately
+        normalizedCode = normalizedCode.replace(/<head>|<body>/im, '$&__LOOKATCODE_SCRIPT__');
+      }
+      textarea.value = normalizedCode;
       form.appendChild(textarea);
 
       frame.parentNode.insertBefore(form, frame.nextSibling);
@@ -173,11 +282,31 @@ function CodeBox(elem) {
   }
 
   // Evaluates a script in a global context
-  function globalEval( code ) {
+  function globalEval(code) {
     let script = document.createElement( "script" );
     script.type = 'module';
     script.text = code;
-    document.head.appendChild( script ).parentNode.removeChild( script );
+    document.head.append(script);
+    script.remove();
+  }
+
+  this.consoleLog = function(args) {
+    if (!outputBox) {
+      outputBox = document.createElement('div');
+      outputBox.className = 'codebox__output';
+
+      elem.append(outputBox);
+
+      let label = document.createElement('div');
+      label.className = 'codebox__output-label';
+      label.innerHTML = t('prism.output');
+      outputBox.append(label);
+    }
+
+    let logElem = document.createElement('div');
+    logElem.className = 'codebox__output-line';
+    logElem.innerHTML = args;
+    outputBox.append(logElem);
   }
 
   function runJS() {
@@ -197,7 +326,7 @@ function CodeBox(elem) {
       form.style.display = 'none';
       form.method = 'POST';
       form.enctype = "multipart/form-data";
-      form.action = "https://lookatcode.com/showhtml";
+      form.action = config.lookatCodeUrlBase + "/showhtml";
       form.target = 'js-global-frame';
 
       let textarea = document.createElement('textarea');
@@ -211,13 +340,12 @@ function CodeBox(elem) {
     } else if (isTrusted) {
 
       if (elem.hasAttribute('data-autorun')) {
-        // make sure functions from "autorun" go to global scope
+        // make sure functions from "autorun" go to global scope (eval has its own scope)
         globalEval(runCode);
         return;
       }
 
       try {
-        /* jshint -W061 */
         window["eval"].call(window, runCode);
       } catch (e) {
         alert(e.constructor.name + ": " + e.message);
@@ -234,7 +362,7 @@ function CodeBox(elem) {
         // create iframe for js
         jsFrame = document.createElement('iframe');
         jsFrame.className = 'js-frame';
-        jsFrame.src = 'https://lookatcode.com/showjs';
+        jsFrame.src = config.lookatCodeUrlBase + '/showjs';
         jsFrame.style.width = 0;
         jsFrame.style.height = 0;
         jsFrame.style.border = 'none';
@@ -302,6 +430,12 @@ function CodeBox(elem) {
 
 
   function run() {
+
+    if (outputBox) {
+      outputBox.remove();
+      outputBox = null;
+    }
+
     if (isJS) {
       runJS();
     } else {
